@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FPS Shooter with Enemy Variations & Jumpscare</title>
+  <!-- Responsive design -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+    }
+    /* Container for the Three.js canvas */
+    #game-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    /* UI overlay for score and health */
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      color: #fff;
+      font-size: 20px;
+      user-select: none;
+    }
+    /* Crosshair in the center */
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 20px;
+      height: 20px;
+      margin-left: -10px;
+      margin-top: -10px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #crosshair:before, #crosshair:after {
+      content: '';
+      position: absolute;
+      background: #fff;
+    }
+    #crosshair:before {
+      left: 9px;
+      top: 0;
+      width: 2px;
+      height: 20px;
+    }
+    #crosshair:after {
+      left: 0;
+      top: 9px;
+      width: 20px;
+      height: 2px;
+    }
+    /* Game Over overlay */
+    #gameOver {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      padding: 20px;
+      border: 2px solid #fff;
+      text-align: center;
+      color: #fff;
+      font-size: 24px;
+      display: none;
+      z-index: 20;
+    }
+    #gameOver button {
+      font-size: 20px;
+      padding: 10px 20px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    /* Mobile look controls (touch area on the right half) */
+    #look-controls {
+      display: none;
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 50%;
+      height: 100%;
+      z-index: 25;
+      /* Prevent default touch gestures */
+      touch-action: none;
+    }
+    /* Mobile joystick container for movement */
+    #joystick-container {
+      display: none;
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      width: 150px;
+      height: 150px;
+      z-index: 30;
+      /* Prevent default touch gestures */
+      touch-action: none;
+    }
+    /* Fire button for mobile */
+    #fire-button {
+      display: none;
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 70px;
+      height: 70px;
+      background: rgba(255,0,0,0.5);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      font-size: 20px;
+      color: #fff;
+      z-index: 30;
+    }
+    /* Jumpscare video overlay */
+    #jumpscare-video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 40;
+      display: none;
+      object-fit: cover;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+  <div id="ui">
+    <div id="score">Score: 0</div>
+    <div id="health">Health: 100</div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="gameOver">
+    <h1>Game Over</h1>
+    <p id="finalScore"></p>
+    <button id="restart">Restart</button>
+  </div>
+  <!-- Mobile controls: joystick for movement, look area, and a fire button -->
+  <div id="joystick-container"></div>
+  <div id="look-controls"></div>
+  <button id="fire-button">Fire</button>
+  <!-- Jumpscare video element -->
+  <video id="jumpscare-video" src="jumpscare.mp4"></video>
+
+  <!-- Include Three.js, PointerLockControls, and NippleJS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://threejs.org/examples/js/controls/PointerLockControls.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.8.6/nipplejs.min.js"></script>
+  <script>
+    let scene, camera, renderer;
+    let controls; // For desktop pointer lock
+    const container = document.getElementById('game-container');
+
+    // Detect mobile devices
+    const isMobile = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+    // Game state variables
+    let enemies = [];
+    let projectiles = [];
+    let lastEnemySpawn = 0;
+    const enemySpawnInterval = 2000; // milliseconds
+    let score = 0;
+    let health = 100;
+    let gameOver = false;
+
+    // Desktop movement flags
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let velocity = new THREE.Vector3();
+
+    // Mobile variables: joystick vector for movement and look controls for view rotation
+    let joystickVector = { x: 0, y: 0 };
+    let yaw = 0, pitch = 0;
+    const lookSensitivity = 0.002;
+
+    // For multi-touch look-controls
+    let lookTouchId = null;
+    let lastLookTouchX = 0, lastLookTouchY = 0;
+
+    // UI elements
+    const scoreElement = document.getElementById('score');
+    const healthElement = document.getElementById('health');
+    const gameOverElement = document.getElementById('gameOver');
+    const finalScoreElement = document.getElementById('finalScore');
+    const restartButton = document.getElementById('restart');
+    const fireButton = document.getElementById('fire-button');
+    const lookControls = document.getElementById('look-controls');
+    const joystickContainer = document.getElementById('joystick-container');
+    const jumpscareVideo = document.getElementById('jumpscare-video');
+
+    // Sound effect objects (ensure these files are in the proper path)
+    const shootSound = new Audio("shoot.mp3");
+    const killSound  = new Audio("kill.mp3");
+    const enemySound = new Audio("randomEnemiesounds.mp3");
+    const walkingSound = new Audio("walking.mp3");
+    walkingSound.loop = true;
+
+    function init() {
+      // Set up scene, camera, and renderer
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      scene.fog = new THREE.Fog(0x000000, 0, 50);
+
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 1.6, 0); // Typical first-person eye-level
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      container.appendChild(renderer.domElement);
+
+      // Add lighting
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+      scene.add(ambientLight);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(5, 10, 7.5);
+      scene.add(directionalLight);
+
+      // Ground plane
+      const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+      const groundMaterial = new THREE.MeshPhongMaterial({ color: 0x555555 });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      if (!isMobile) {
+        // Desktop: Use PointerLockControls
+        controls = new THREE.PointerLockControls(camera, document.body);
+        scene.add(controls.getObject());
+        const blocker = document.createElement('div');
+        blocker.style.position = 'absolute';
+        blocker.style.top = '0';
+        blocker.style.left = '0';
+        blocker.style.width = '100%';
+        blocker.style.height = '100%';
+        blocker.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        blocker.style.display = 'flex';
+        blocker.style.alignItems = 'center';
+        blocker.style.justifyContent = 'center';
+        blocker.style.color = '#fff';
+        blocker.style.fontSize = '30px';
+        blocker.style.zIndex = '30';
+        blocker.innerHTML = 'Click to Play';
+        document.body.appendChild(blocker);
+        blocker.addEventListener('click', function () {
+          controls.lock();
+        });
+        controls.addEventListener('lock', function () {
+          blocker.style.display = 'none';
+        });
+        controls.addEventListener('unlock', function () {
+          blocker.style.display = 'flex';
+          blocker.innerHTML = 'Click to Play';
+        });
+        document.addEventListener('keydown', onKeyDown, false);
+        document.addEventListener('keyup', onKeyUp, false);
+      } else {
+        // Mobile: Show joystick, look controls, and fire button
+        joystickContainer.style.display = 'block';
+        fireButton.style.display = 'block';
+        lookControls.style.display = 'block';
+
+        // Initialize the virtual joystick using NippleJS
+        let joystickManager = nipplejs.create({
+          zone: joystickContainer,
+          mode: 'static',
+          position: { left: '75px', bottom: '75px' },
+          color: 'white'
+        });
+        joystickManager.on('move', function (evt, data) {
+          if (data && data.vector) {
+            joystickVector.x = data.vector.x;
+            joystickVector.y = data.vector.y;
+          }
+        });
+        joystickManager.on('end', function () {
+          joystickVector.x = 0;
+          joystickVector.y = 0;
+        });
+
+        // Look controls: allow dragging on the right half while using the joystick.
+        lookControls.addEventListener('touchstart', function (e) {
+          if (lookTouchId === null && e.touches.length > 0) {
+            lookTouchId = e.touches[0].identifier;
+            lastLookTouchX = e.touches[0].clientX;
+            lastLookTouchY = e.touches[0].clientY;
+          }
+        });
+        lookControls.addEventListener('touchmove', function (e) {
+          for (let i = 0; i < e.touches.length; i++) {
+            if (e.touches[i].identifier === lookTouchId) {
+              const touchX = e.touches[i].clientX;
+              const touchY = e.touches[i].clientY;
+              const deltaX = touchX - lastLookTouchX;
+              const deltaY = touchY - lastLookTouchY;
+              yaw -= deltaX * lookSensitivity;
+              pitch -= deltaY * lookSensitivity;
+              pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+              lastLookTouchX = touchX;
+              lastLookTouchY = touchY;
+              break;
+            }
+          }
+        });
+        lookControls.addEventListener('touchend', function (e) {
+          for (let i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === lookTouchId) {
+              lookTouchId = null;
+              break;
+            }
+          }
+        });
+      }
+
+      window.addEventListener('resize', onWindowResize, false);
+
+      // Both desktop and mobile: clicking (or tapping the fire button) fires a projectile.
+      document.addEventListener('click', function (e) {
+        if (!isMobile && controls && controls.isLocked) {
+          shootProjectile();
+        }
+      });
+      fireButton.addEventListener('touchstart', function (e) {
+        shootProjectile();
+        e.preventDefault();
+      });
+
+      animate();
+    }
+
+    // Adjust camera and renderer on window resize
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // Desktop keyboard movement handlers
+    function onKeyDown(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = true;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = true;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = true;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = true;
+          break;
+      }
+    }
+    function onKeyUp(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = false;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = false;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = false;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = false;
+          break;
+      }
+    }
+
+    // Spawn an enemy (a sphere) ahead of the player at a random offset.
+    // With a 1 in 10 chance, spawn a green enemy that has 10 health and moves at the same speed as the player.
+    function spawnEnemy() {
+      const geometry = new THREE.SphereGeometry(0.5, 16, 16);
+      let material, healthVal, isGreen;
+      // 10% chance for green enemy
+      if (Math.random() < 0.1) {
+        material = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+        healthVal = 10;
+        isGreen = true;
+      } else {
+        material = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+        healthVal = 1;
+        isGreen = false;
+      }
+      const enemy = new THREE.Mesh(geometry, material);
+      const distance = 20 + Math.random() * 10;
+      const angle = (Math.random() - 0.5) * Math.PI / 3;
+      enemy.position.set(
+        camera.position.x + Math.sin(angle) * distance,
+        1,
+        camera.position.z - Math.cos(angle) * distance
+      );
+      enemy.userData.health = healthVal;
+      enemy.userData.green = isGreen;
+      scene.add(enemy);
+      enemies.push(enemy);
+
+      // Play enemy sound randomly (30% chance) when any enemy spawns
+      if (Math.random() < 0.3) {
+        enemySound.currentTime = 0;
+        enemySound.play();
+      }
+    }
+
+    // Create and shoot a projectile from the player's position.
+    function shootProjectile() {
+      const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const projectile = new THREE.Mesh(geometry, material);
+      projectile.position.copy(camera.position);
+      let direction = new THREE.Vector3();
+      if (!isMobile) {
+        controls.getDirection(direction);
+      } else {
+        direction.set(
+          -Math.sin(yaw) * Math.cos(pitch),
+          Math.sin(pitch),
+          -Math.cos(yaw) * Math.cos(pitch)
+        );
+      }
+      projectile.userData = { velocity: direction.multiplyScalar(1) };
+      scene.add(projectile);
+      projectiles.push(projectile);
+
+      // Play shooting sound
+      shootSound.currentTime = 0;
+      shootSound.play();
+    }
+
+    // Update projectile positions and remove if too far.
+    function updateProjectiles(delta) {
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const proj = projectiles[i];
+        proj.position.add(proj.userData.velocity.clone().multiplyScalar(delta * 50));
+        if (proj.position.distanceTo(camera.position) > 100) {
+          scene.remove(proj);
+          projectiles.splice(i, 1);
+        }
+      }
+    }
+
+    // Move enemies toward the player.
+    // Green enemies (if enemy.userData.green is true) move at the same speed as the player:
+    //   speed = 10 on desktop or 5 on mobile.
+    // Regular enemies move slowly at speed 2.
+    function updateEnemies(delta) {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const enemy = enemies[i];
+        const direction = new THREE.Vector3();
+        direction.subVectors(camera.position, enemy.position).normalize();
+        let enemySpeed = enemy.userData.green ? (isMobile ? 5 : 10) : 2;
+        enemy.position.add(direction.multiplyScalar(delta * enemySpeed));
+        if (enemy.position.distanceTo(camera.position) < 1) {
+          health -= 10;
+          scene.remove(enemy);
+          enemies.splice(i, 1);
+          if (health <= 0) {
+            endGame();
+          }
+        }
+      }
+    }
+
+    // Check for collisions between projectiles and enemies.
+    // For green enemies, each hit reduces health by 1 and only removes the enemy when health reaches 0.
+    function checkCollisions() {
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const proj = projectiles[i];
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const enemy = enemies[j];
+          if (proj.position.distanceTo(enemy.position) < 0.5) {
+            // Remove projectile in any case
+            scene.remove(proj);
+            projectiles.splice(i, 1);
+            // If enemy has more than 1 health (green enemy), reduce health by 1.
+            if (enemy.userData.health > 1) {
+              enemy.userData.health--;
+              // (Optionally you could play a “hit” sound here.)
+            } else {
+              // For a normal enemy (or a green enemy that has been hit enough times) remove it.
+              score++;
+              scene.remove(enemy);
+              enemies.splice(j, 1);
+              killSound.currentTime = 0;
+              killSound.play();
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // Update movement controls for both desktop and mobile, and handle walking sound.
+    function updateControls(delta) {
+      let moving = false;
+      if (!isMobile) {
+        // Desktop movement via PointerLockControls
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
+        const speed = 10.0;
+        if (moveForward) { velocity.z -= speed * delta; moving = true; }
+        if (moveBackward) { velocity.z += speed * delta; moving = true; }
+        if (moveLeft) { velocity.x -= speed * delta; moving = true; }
+        if (moveRight) { velocity.x += speed * delta; moving = true; }
+        controls.moveRight(velocity.x * delta);
+        controls.moveForward(velocity.z * delta);
+      } else {
+        // Mobile: use the joystick vector for movement.
+        const speed = 5.0 * delta;
+        const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
+        const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+        let moveX = joystickVector.x;
+        let moveY = joystickVector.y;
+        if (Math.abs(moveX) > 0.05 || Math.abs(moveY) > 0.05) {
+          moving = true;
+        }
+        camera.position.add(right.clone().multiplyScalar(moveX * speed));
+        camera.position.add(forward.clone().multiplyScalar(moveY * speed));
+        camera.rotation.set(pitch, yaw, 0);
+      }
+      
+      // Handle walking sound: play if moving, pause and reset if not.
+      if (moving) {
+        if (walkingSound.paused) {
+          walkingSound.play();
+        }
+      } else {
+        if (!walkingSound.paused) {
+          walkingSound.pause();
+          walkingSound.currentTime = 0;
+        }
+      }
+    }
+
+    let lastTime = performance.now();
+    function animate() {
+      if (gameOver) return;
+      requestAnimationFrame(animate);
+      const time = performance.now();
+      const delta = (time - lastTime) / 1000;
+      lastTime = time;
+
+      // Spawn enemies at intervals
+      if (time - lastEnemySpawn > enemySpawnInterval) {
+        spawnEnemy();
+        lastEnemySpawn = time;
+      }
+
+      updateProjectiles(delta);
+      updateEnemies(delta);
+      checkCollisions();
+      updateControls(delta);
+
+      scoreElement.textContent = 'Score: ' + score;
+      healthElement.textContent = 'Health: ' + health;
+
+      renderer.render(scene, camera);
+    }
+
+    // End the game, trigger the jumpscare, then show Game Over overlay.
+    function endGame() {
+      gameOver = true;
+      // Stop walking sound if playing
+      walkingSound.pause();
+      walkingSound.currentTime = 0;
+      // Show and play the jumpscare video
+      jumpscareVideo.style.display = 'block';
+      jumpscareVideo.currentTime = 0;
+      jumpscareVideo.play();
+      jumpscareVideo.onended = function() {
+        jumpscareVideo.style.display = 'none';
+        finalScoreElement.textContent = 'Your score: ' + score;
+        gameOverElement.style.display = 'block';
+      }
+    }
+
+    // Restart the game by resetting variables and cleaning up enemies/projectiles.
+    restartButton.addEventListener('click', function () {
+      score = 0;
+      health = 100;
+      gameOver = false;
+      enemies.forEach(e => scene.remove(e));
+      projectiles.forEach(p => scene.remove(p));
+      enemies = [];
+      projectiles = [];
+      camera.position.set(0, 1.6, 0);
+      if (!isMobile && controls) {
+        controls.getObject().position.set(0, 1.6, 0);
+      }
+      gameOverElement.style.display = 'none';
+      lastTime = performance.now();
+      animate();
+    });
+
+    init();
+  </script>
+</body>
+</html>
